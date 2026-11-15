@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+# One command for running the photo stack. Run `./photo help` to see what it can do.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+IMMICH_SERVICES="immich-server immich-machine-learning redis database"
+
+say()  { printf '\n==> %s\n' "$*"; }
+note() { printf '    %s\n' "$*"; }
+die()  { printf '\nError: %s\n' "$*" >&2; exit 1; }
+ask()  { local a; read -rp "$1${2:+ [$2]}: " a; echo "${a:-${2:-}}"; }
+envget() { grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- || true; }
+
+# Account number (1 or 2) -> docker service, Apple ID, folder
+svc_for() { case "$1" in 1) echo icloudpd ;; 2) echo icloudpd-2 ;; *) die "Account must be 1 or 2." ;; esac; }
+id_for()  { case "$1" in 1) envget APPLE_ID ;; 2) envget APPLE_ID_2 ;; esac; }
+dir_for() { case "$1" in 1) envget ICLOUD_LOCATION ;; 2) envget ICLOUD_LOCATION_2 ;; esac; }
+active_accounts() { for n in 1 2; do [ -n "$(id_for $n)" ] && echo $n; done; return 0; }
+logged_in() { ls -A "$(dir_for "$1")/.cookies" 2>/dev/null | grep -q .; }
+
+need_docker() {
+  docker info >/dev/null 2>&1 && return
+  say "Starting Docker Desktop..."
+  open -a Docker 2>/dev/null || die "Docker Desktop isn't installed. Get it from https://www.docker.com/products/docker-desktop/"
+  for _ in $(seq 1 60); do docker info >/dev/null 2>&1 && return; sleep 2; done
+  die "Docker didn't start. Open Docker Desktop, wait until it says it's running, then try again."
+}
+need_env() { [ -f .env ] || die "Not set up yet. Run: ./photo setup"; }
+need_drive() {
+  local d; d="$(dirname "$(envget UPLOAD_LOCATION)")"
+  [ -d "$d" ] || die "Photo drive not found at $d. Plug it in and try again."
+}
+need_terminal() {
+  [ -t 0 ] || die "This asks for a password, so it must run in a Terminal window. Open Terminal and run: cd \"$PWD\" && ./photo $*"
+}
+
+wait_for_immich() {
+  printf '    waiting for Immich to start'
+  for _ in $(seq 1 90); do
+    curl -fs http://localhost:2283/api/server/ping >/dev/null 2>&1 && { echo " ok"; return; }
+    printf '.'; sleep 2
+  done
+  echo; die "Immich didn't respond. Check: docker compose logs immich-server"
+}
+
+start_immich() { docker compose up -d $IMMICH_SERVICES; wait_for_immich; }
+
+start_account() {
+  local n=$1
+  if logged_in "$n"; then
+    docker compose up -d "$(svc_for "$n")"
+    note "Account $n ($(id_for "$n")) is syncing."
+  else
+    note "Account $n ($(id_for "$n")) needs to log in first: ./photo login $n"
+  fi
+}
+
+write_env() { # drive id1 id2 tz password
+  cat > .env <<EOF
+# Created by ./photo setup. Keep a copy in a password manager — it is not in git.
+# Docs: https://docs.immich.app/install/environment-variables
+
+# Immich media storage (external drive)
+UPLOAD_LOCATION=$1/immich
+# Immich database — must be on this computer's disk, not a network share
+DB_DATA_LOCATION=./postgres
+TZ=$4
+IMMICH_VERSION=v3
+# Only A-Za-z0-9
+DB_PASSWORD=$5
+DB_USERNAME=postgres
+DB_DATABASE_NAME=immich
+
+# iCloud account 1
+ICLOUD_LOCATION=$1/icloud-$2
+APPLE_ID=$2
+
+# iCloud account 2 (optional — leave APPLE_ID_2 blank to skip)
+ICLOUD_LOCATION_2=$1/icloud-${3:-unused}
+APPLE_ID_2=$3
+EOF
+  chmod 600 .env
+}
+
+cmd_setup() {
+  need_docker
+  if [ -f .env ]; then
+    say "Using your existing settings (.env)."
+  else
+    need_terminal setup
+    say "First-time setup. Press Enter to accept the [default]."
+    local drive id1 id2 tz pw
+    drive="$(ask 'Photo drive path' /Volumes/home_backup)"
+    [ -d "$drive" ] || die "Nothing at $drive. Plug in the drive (or check its name in Finder) and run setup again."
+    id1="$(ask 'Apple ID for iCloud account 1')"
+    case "$id1" in *@*) ;; *) die "That doesn't look like an Apple ID email." ;; esac
+    id2="$(ask 'Apple ID for iCloud account 2 (Enter to skip)')"
+    tz="$(ask 'Time zone' "$(readlink /etc/localtime | sed 's#.*/zoneinfo/##')")"
+    pw="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+    write_env "$drive" "$id1" "$id2" "$tz" "$pw"
+    note "Saved settings to .env (with a new random database password)."
+  fi
+
+  need_drive
+  mkdir -p "$(envget UPLOAD_LOCATION)"
+  for n in $(active_accounts); do mkdir -p "$(dir_for "$n")"; done
+  docker compose config --quiet || die "docker-compose.yml or .env has a problem (see above)."
+
+  # New computer with no database yet, but backups on the drive: offer to restore.
+  local backup
+  backup="$(ls -t "$(envget UPLOAD_LOCATION)"/backups/*.sql.gz 2>/dev/null | head -1 || true)"
+  if [ ! -d postgres ] && [ -n "$backup" ]; then
+    say "No database on this computer, but found a backup on the drive:"
+    note "$(basename "$backup")"
+    if [ "$(ask 'Restore it? (Y/n)' Y)" != n ]; then cmd_restore_db "$backup"; fi
+  fi
+
+  say "Starting Immich..."
+  start_immich
+  say "Starting iCloud sync..."
+  for n in $(active_accounts); do start_account "$n"; done
+
+  say "Done. Open http://localhost:2283"
+  [ -d postgres ] && note "(First time? Create the admin account there.)"
+}
+
+cmd_login() {
+  local n=${1:-1} svc id
+  need_env; need_terminal login "$n"; need_docker; need_drive
+  svc="$(svc_for "$n")"; id="$(id_for "$n")"
+  [ -n "$id" ] || die "No Apple ID set for account $n. Add APPLE_ID$([ "$n" = 2 ] && echo _2) to .env."
+  mkdir -p "$(dir_for "$n")"
+  say "Logging in $id. Enter the Apple password, then the 6-digit code from the iPhone."
+  docker compose run --rm "$svc" icloudpd --directory /data --cookie-directory /data/.cookies --username "$id" --auth-only
+  say "Logged in. Starting sync for account $n..."
+  docker compose up -d "$svc"
+}
+
+cmd_start() {
+  need_env; need_docker; need_drive
+  if [ -n "${1:-}" ]; then start_account "$1"; return; fi
+  start_immich
+  for n in $(active_accounts); do start_account "$n"; done
+  say "Running. Open http://localhost:2283"
+}
+
+cmd_stop() {
+  need_docker
+  if [ -n "${1:-}" ]; then
+    docker compose stop "$(svc_for "$1")"
+    say "Account $1 sync paused. Resume with: ./photo start $1"
+  else
+    docker compose stop
+    say "Everything stopped. It's now safe to eject the drive. Resume with: ./photo start"
+  fi
+}
+
+cmd_status() {
+  need_env; need_docker
+  say "Services"
+  docker compose ps -a --format 'table {{.Name}}\t{{.Status}}'
+  for n in $(active_accounts); do
+    local svc dir total done_n state recent
+    svc="$(svc_for "$n")"; dir="$(dir_for "$n")"
+    total="$(docker compose logs "$svc" 2>/dev/null | grep -oE 'Downloading [0-9]+ original' | tail -1 | grep -oE '[0-9]+' || true)"
+    done_n="$(find "$dir" -type f -not -path '*/.cookies/*' -not -name '*_HEVC.MOV' -not -name .DS_Store 2>/dev/null | wc -l | tr -d ' ')"
+    state="$(docker inspect -f '{{.State.Status}}' "$svc" 2>/dev/null || echo 'not started')"
+    say "Account $n: $(id_for "$n") ($state)"
+    if [ -n "$total" ] && [ "$total" -gt 0 ]; then
+      note "$done_n of $total items ($((done_n * 100 / total))%)"
+    else
+      note "$done_n items downloaded"
+    fi
+    note "Folder: $dir  ($(du -sh "$dir" 2>/dev/null | cut -f1))"
+    recent="$(docker compose logs --tail 50 "$svc" 2>/dev/null || true)"
+    if echo "$recent" | grep -qiE 'auth.*(fail|requir|expir)|invalid.*password|2fa|two-factor'; then
+      note "!! Login looks expired. Run in Terminal: ./photo login $n"
+    elif echo "$recent" | grep -qi 'waiting'; then
+      note "Up to date — next check within the hour."
+    fi
+    logged_in "$n" || note "Not logged in yet. Run in Terminal: ./photo login $n"
+  done
+  local drive; drive="$(dirname "$(envget UPLOAD_LOCATION)")"
+  [ -d "$drive" ] && say "Drive: $(df -h "$drive" | awk 'NR==2 {print $4 " free of " $2}')"
+}
+
+cmd_logs() {
+  need_docker
+  if [ -n "${1:-}" ]; then docker compose logs -f --tail 30 "$(svc_for "$1")"
+  else docker compose logs -f --tail 30; fi
+}
+
+cmd_import() {
+  local n=${1:-1} dir key
+  need_env; need_terminal import "$n"; need_docker; need_drive
+  dir="$(dir_for "$n")"
+  say "Importing $dir into Immich."
+  note "Use an API key from the Immich user who should own these photos"
+  note "(Immich → profile picture → Account Settings → API Keys → New API Key)."
+  read -rsp "    Paste the API key: " key; echo
+  [ -n "$key" ] || die "No API key entered."
+  docker run -it --rm \
+    -v "$dir":/import:ro \
+    -e IMMICH_INSTANCE_URL=http://host.docker.internal:2283/api \
+    -e IMMICH_API_KEY="$key" \
+    ghcr.io/immich-app/immich-cli:latest \
+    upload --recursive --ignore '**/.cookies/**' /import
+  say "Import finished. Running it again later only uploads new photos."
+}
+
+cmd_restore_db() {
+  local file=${1:-} user
+  need_env; need_docker; need_drive
+  [ -n "$file" ] || file="$(ls -t "$(envget UPLOAD_LOCATION)"/backups/*.sql.gz 2>/dev/null | head -1 || true)"
+  [ -f "$file" ] || die "No database backup found in $(envget UPLOAD_LOCATION)/backups"
+  if [ -d postgres ] && [ -n "$(ls -A postgres 2>/dev/null)" ]; then
+    die "A database already exists in ./postgres. Restoring needs an empty one: stop everything (./photo stop), rename the folder (mv postgres postgres.old), then run this again."
+  fi
+  user="$(envget DB_USERNAME)"
+  say "Restoring database from $(basename "$file")..."
+  docker compose create $IMMICH_SERVICES
+  docker compose start redis database
+  printf '    waiting for the database'
+  for _ in $(seq 1 60); do
+    docker exec immich_postgres pg_isready -U "$user" >/dev/null 2>&1 && break
+    printf '.'; sleep 2
+  done; echo
+  sleep 5
+  gunzip --stdout "$file" \
+    | sed "s/SELECT pg_catalog.set_config('search_path', '', false);/SELECT pg_catalog.set_config('search_path', 'public, pg_catalog', true);/g" \
+    | docker exec -i immich_postgres psql --dbname=postgres --username="$user" >/dev/null
+  say "Database restored."
+}
+
+cmd_pack() {
+  local dest=${1:-$HOME/Desktop/photo-stack-transfer-$(date +%Y-%m-%d).tar.gz}
+  need_env; need_docker
+  say "Stopping everything so the database is safe to copy..."
+  docker compose stop
+  say "Packing settings + database into $dest ..."
+  tar -czf "$dest" --exclude '.DS_Store' -C "$(dirname "$PWD")" "$(basename "$PWD")"
+  say "Done: $dest ($(du -h "$dest" | cut -f1))"
+  note "It contains your database password — move it privately (AirDrop/USB) and delete it afterwards."
+  note "On the new Mac:  tar -xzf $(basename "$dest") -C ~ && cd ~/$(basename "$PWD") && ./photo setup"
+  note "Then eject the drive here and plug it into the new Mac."
+  note "Not moving after all? Restart here with: ./photo start"
+}
+
+cmd_help() {
+  cat <<'EOF'
+Usage: ./photo <command>
+
+  setup          First-time setup, or set up on a new computer. Safe to re-run.
+  login [1|2]    Log in to iCloud for account 1 or 2 (asks for password + 2FA code).
+  start [1|2]    Start everything, or resume one account's sync.
+  stop  [1|2]    Stop everything (do this before ejecting the drive), or pause one account.
+  status         Show what's running and iCloud download progress.
+  logs  [1|2]    Watch live logs (Ctrl+C to stop watching).
+  import [1|2]   Copy an account's iCloud photos into Immich.
+  pack           Bundle settings + database to move to another Mac.
+  restore-db     Rebuild the database from the newest backup on the drive.
+EOF
+}
+
+case "${1:-help}" in
+  setup)      cmd_setup ;;
+  login)      cmd_login "${2:-1}" ;;
+  start)      cmd_start "${2:-}" ;;
+  stop)       cmd_stop "${2:-}" ;;
+  status)     cmd_status ;;
+  logs)       cmd_logs "${2:-}" ;;
+  import)     cmd_import "${2:-1}" ;;
+  pack)       cmd_pack "${2:-}" ;;
+  restore-db) cmd_restore_db "${2:-}" ;;
+  help|-h|--help) cmd_help ;;
+  *) cmd_help; exit 1 ;;
+esac
