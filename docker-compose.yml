@@ -82,5 +82,13 @@ services:
       - ${ICLOUD_LOCATION}:/data
     command: icloudpd --directory /data --cookie-directory /data/.cookies --username ${APPLE_ID} --watch-with-interval 3600
 
+  icloudpd-2:
+    container_name: icloudpd-2
+    image: icloudpd/icloudpd:latest
+    restart: unless-stopped
+    volumes:
+      - ${ICLOUD_LOCATION_2}:/data
+    command: icloudpd --directory /data --cookie-directory /data/.cookies --username ${APPLE_ID_2} --watch-with-interval 3600
+
 volumes:
   model-cache:

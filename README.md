@@ -32,6 +32,15 @@ Self-hosted photo backup on a Mac, run with Docker Desktop:
    ```
 7. Start the hourly sync: `docker compose up -d icloudpd`
 
+### Second iCloud account
+
+`icloudpd-2` syncs a second Apple ID (`APPLE_ID_2`) into `ICLOUD_LOCATION_2`. Log it in the same way, in a real Terminal window (not through a non-interactive shell):
+```sh
+docker compose run --rm icloudpd-2 icloudpd --directory /data --cookie-directory /data/.cookies --username "$(grep '^APPLE_ID_2=' .env | cut -d= -f2)" --auth-only
+docker compose up -d icloudpd-2
+```
+To keep that person's photos separate in Immich, import their folder with an API key from their own Immich user (see below, using `/Volumes/home_backup/icloud-2`).
+
 Apple's login session expires about every 2 months. When `docker compose logs icloudpd` shows authentication errors, repeat step 6, then run `docker compose restart icloudpd`.
 
 ## Import the iCloud folder into Immich
