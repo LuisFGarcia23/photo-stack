@@ -1,0 +1,6 @@
+.env
+postgres/
+icloud/
+library/
+*.log
+.DS_Store
