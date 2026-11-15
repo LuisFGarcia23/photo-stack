@@ -85,7 +85,7 @@ Everything comes back as it was, including the iCloud logins. Update the server 
 
 ### If the old Mac is lost or broken
 
-You won't have the database, but Immich saves daily database backups on the drive. Get this folder from git (or download it), copy your `.env` back in from your password manager, plug in the drive, and run `./photo setup` — it finds the newest backup on the drive and offers to restore it.
+You won't have the database, but Immich saves daily database backups on the drive. Get this folder with `gh auth login` then `gh repo clone LuisFGarcia23/photo-stack ~/photo-stack`, copy your `.env` back in from your password manager, plug in the drive, and run `./photo setup` — it finds the newest backup on the drive and offers to restore it.
 
 No `.env` either? Run `./photo setup` anyway and answer the questions. Your photos are safe on the drive, but you'll have to set up Immich again and run `./photo import` to bring them back in.
 
