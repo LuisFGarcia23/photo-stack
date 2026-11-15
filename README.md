@@ -2,6 +2,7 @@
 
 Self-hosted photo backup on a Mac, run with Docker Desktop:
 
+- Each iCloud account syncs to its own folder named after its Apple ID, e.g. `/Volumes/home_backup/icloud-you@example.com`.
 - **Immich** — the main photo library, web UI and iPhone app. Uses Immich's official `docker-compose.yml`, unmodified.
 - **icloudpd** — downloads the full iCloud Photos library and checks for new photos every hour.
 
@@ -10,7 +11,7 @@ Self-hosted photo backup on a Mac, run with Docker Desktop:
 | Config (`docker-compose.yml`, `.env.example`, this README) | this repo | yes |
 | Secrets (`.env`) | this repo, ignored | **no** — keep a copy in a password manager |
 | Immich library + automatic DB dumps | `/Volumes/home_backup/immich` | no |
-| iCloud download (+ login cookies in `.cookies/`) | `/Volumes/home_backup/icloud` | no |
+| iCloud download (+ login cookies in `.cookies/`) | `/Volumes/home_backup/icloud-<apple-id>` | no |
 | Postgres data | `./postgres` (internal disk; network shares are not supported) | no |
 
 `example.env` is Immich's original template, kept for reference. The real settings are in `.env` (see `.env.example` for the keys).
@@ -39,7 +40,7 @@ Self-hosted photo backup on a Mac, run with Docker Desktop:
 docker compose run --rm icloudpd-2 icloudpd --directory /data --cookie-directory /data/.cookies --username "$(grep '^APPLE_ID_2=' .env | cut -d= -f2)" --auth-only
 docker compose up -d icloudpd-2
 ```
-To keep that person's photos separate in Immich, import their folder with an API key from their own Immich user (see below, using `/Volumes/home_backup/icloud-2`).
+To keep that person's photos separate in Immich, import their folder with an API key from their own Immich user (see below, using `/Volumes/home_backup/icloud-<apple-id-2>`).
 
 Apple's login session expires about every 2 months. When `docker compose logs icloudpd` shows authentication errors, repeat step 6, then run `docker compose restart icloudpd`.
 
@@ -49,7 +50,7 @@ Apple's login session expires about every 2 months. When `docker compose logs ic
 2. Run the CLI from the Docker image. It mounts the iCloud folder read-only and skips the cookie folder:
    ```sh
    docker run -it --rm \
-     -v /Volumes/home_backup/icloud:/import:ro \
+     -v /Volumes/home_backup/icloud-<apple-id>:/import:ro \
      -e IMMICH_INSTANCE_URL=http://host.docker.internal:2283/api \
      -e IMMICH_API_KEY=<your-api-key> \
      ghcr.io/immich-app/immich-cli:latest \
