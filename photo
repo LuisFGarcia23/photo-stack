@@ -21,6 +21,7 @@ active_accounts() { for n in 1 2; do [ -n "$(id_for $n)" ] && echo $n; done; ret
 logged_in() { ls -A "$(dir_for "$1")/.cookies" 2>/dev/null | grep -q .; }
 
 need_docker() {
+  fix_docker_creds
   docker info >/dev/null 2>&1 && return
   if [ -n "$IS_WSL" ]; then
     command -v docker >/dev/null || die "Docker isn't available in Ubuntu. In Docker Desktop: Settings → Resources → WSL integration → turn on Ubuntu → Apply. Then try again."
@@ -33,6 +34,19 @@ need_docker() {
   for _ in $(seq 1 60); do docker info >/dev/null 2>&1 && return; sleep 2; done
   die "Docker didn't start. Open Docker Desktop, wait until it says it's running, then try again."
 }
+# On Windows (WSL), Docker's saved-login helper often fails, which blocks even public downloads
+# ("error getting credentials"). Immich's images are public, so turn the helper off if it's broken.
+fix_docker_creds() {
+  local cfg="$HOME/.docker/config.json" helper
+  [ -n "$IS_WSL" ] && [ -f "$cfg" ] || return 0
+  helper="$(grep -oE '"credsStore" *: *"[^"]+"' "$cfg" | sed -E 's/.*"([^"]+)"$/\1/' || true)"
+  [ -n "$helper" ] || return 0
+  if ! "docker-credential-$helper" list >/dev/null 2>&1; then
+    sed -i 's/"credsStore"/"credsStore_off"/' "$cfg"
+    note "Turned off Docker's Windows login helper (it was failing; not needed for this)."
+  fi
+}
+
 need_env() { [ -f .env ] || die "Not set up yet. Run: ./photo setup"; }
 need_drive() {
   local d; d="$(dirname "$(envget UPLOAD_LOCATION)")"
