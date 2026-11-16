@@ -21,7 +21,7 @@ fi
 
 say "Downloading photo-stack into $DIR ..."
 mkdir -p "$DIR"
-curl -fsSL "https://github.com/$REPO/archive/refs/heads/main.tar.gz" | tar -xz -C "$DIR" --strip-components 1
+curl -fsSL "https://codeload.github.com/$REPO/tar.gz/refs/heads/main" | tar -xz -C "$DIR" --strip-components 1
 chmod +x "$DIR/photo"
 
 cd "$DIR"
