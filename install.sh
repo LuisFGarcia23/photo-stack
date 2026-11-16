@@ -10,14 +10,26 @@ DIR="${PHOTO_STACK_DIR:-$HOME/photo-stack}"
 say() { printf '\n==> %s\n' "$*"; }
 die() { printf '\nError: %s\n' "$*" >&2; exit 1; }
 
-[ "$(uname)" = Darwin ] || die "This installer is for macOS."
-
-if [ ! -d /Applications/Docker.app ]; then
-  say "Docker Desktop is needed first."
-  echo "    Opening the download page. Install it, open it once, then run this command again."
-  open "https://www.docker.com/products/docker-desktop/"
-  exit 1
-fi
+case "$(uname)" in
+  Darwin)
+    if [ ! -d /Applications/Docker.app ]; then
+      say "Docker Desktop is needed first."
+      echo "    Opening the download page. Install it, open it once, then run this command again."
+      open "https://www.docker.com/products/docker-desktop/"
+      exit 1
+    fi
+    SLEEP_TIP="keep the Mac awake during the first download by running:  caffeinate -i" ;;
+  Linux)
+    if ! command -v docker >/dev/null; then
+      say "Docker isn't available here yet."
+      echo "    On Windows: install Docker Desktop (https://www.docker.com/products/docker-desktop/), open it once,"
+      echo "    then in Docker Desktop: Settings → Resources → WSL integration → turn on Ubuntu → Apply."
+      echo "    Then run this command again."
+      exit 1
+    fi
+    SLEEP_TIP="keep the computer awake during the first download. On Windows: Settings → System → Power → Sleep: Never (when plugged in)." ;;
+  *) die "Unsupported system. Use a Mac, or Windows with Ubuntu (WSL)." ;;
+esac
 
 say "Downloading photo-stack into $DIR ..."
 mkdir -p "$DIR"
@@ -33,4 +45,4 @@ echo "    ./photo watch     live download count"
 echo "    ./photo status    what's running"
 echo "    ./photo help      everything else"
 echo
-echo "    Tip: keep the Mac awake during the first download by running:  caffeinate -i"
+echo "    Tip: $SLEEP_TIP"

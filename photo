@@ -4,6 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 IMMICH_SERVICES="immich-server immich-machine-learning redis database"
+# Windows runs this inside WSL (Ubuntu); its drives appear as /mnt/c, /mnt/d, ...
+IS_WSL=""; grep -qi microsoft /proc/version 2>/dev/null && IS_WSL=1
 
 say()  { printf '\n==> %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
@@ -20,8 +22,14 @@ logged_in() { ls -A "$(dir_for "$1")/.cookies" 2>/dev/null | grep -q .; }
 
 need_docker() {
   docker info >/dev/null 2>&1 && return
-  say "Starting Docker Desktop..."
-  open -a Docker 2>/dev/null || die "Docker Desktop isn't installed. Get it from https://www.docker.com/products/docker-desktop/"
+  if [ -n "$IS_WSL" ]; then
+    command -v docker >/dev/null || die "Docker isn't available in Ubuntu. In Docker Desktop: Settings → Resources → WSL integration → turn on Ubuntu → Apply. Then try again."
+    say "Starting Docker Desktop..."
+    cmd.exe /c start "" "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe" >/dev/null 2>&1 || true
+  else
+    say "Starting Docker Desktop..."
+    open -a Docker 2>/dev/null || die "Docker Desktop isn't installed. Get it from https://www.docker.com/products/docker-desktop/"
+  fi
   for _ in $(seq 1 60); do docker info >/dev/null 2>&1 && return; sleep 2; done
   die "Docker didn't start. Open Docker Desktop, wait until it says it's running, then try again."
 }
@@ -90,13 +98,28 @@ cmd_setup() {
     need_terminal setup
     say "First-time setup. Press Enter to accept the [default]."
     local drive id1 id2 tz pw
-    echo "    Drives connected now:"; ls /Volumes | sed 's#^#      /Volumes/#'
-    drive="$(ask 'Photo drive path' "$(ls -d /Volumes/* 2>/dev/null | grep -v 'Macintosh HD' | head -1)")"
-    [ -d "$drive" ] || die "Nothing at $drive. Plug in the drive (or check its name in Finder) and run setup again."
+    local drives
+    if [ -n "$IS_WSL" ]; then
+      drives="$(ls -d /mnt/[d-z] 2>/dev/null || true)"
+      echo "    Windows drives: D: is /mnt/d, E: is /mnt/e, and so on. Found:"
+    else
+      drives="$(ls -d /Volumes/* 2>/dev/null | grep -v 'Macintosh HD' || true)"
+      echo "    Drives connected now:"
+    fi
+    echo "${drives:-(none found)}" | sed 's#^#      #'
+    drive="$(ask 'Photo drive path' "$(echo "$drives" | head -1)")"
+    drive="${drive%/}"
+    # WSL doesn't always mount USB drives plugged in after it started; try once.
+    if [ -n "$IS_WSL" ] && [ ! -d "$drive" ] && echo "$drive" | grep -qE '^/mnt/[a-z]$'; then
+      local letter; letter="$(echo "${drive#/mnt/}" | tr a-z A-Z)"
+      echo "    Mounting $letter: (may ask for your Ubuntu password)..."
+      sudo mkdir -p "$drive" && sudo mount -t drvfs "$letter:" "$drive" || true
+    fi
+    [ -d "$drive" ] || die "Nothing at $drive. Plug in the drive and run setup again."
     id1="$(ask 'Apple ID for iCloud account 1')"
     case "$id1" in *@*) ;; *) die "That doesn't look like an Apple ID email." ;; esac
     id2="$(ask 'Apple ID for iCloud account 2 (Enter to skip)')"
-    tz="$(ask 'Time zone' "$(readlink /etc/localtime | sed 's#.*/zoneinfo/##')")"
+    tz="$(ask 'Time zone (e.g. America/Chicago, America/New_York)' "$(readlink /etc/localtime 2>/dev/null | sed 's#.*/zoneinfo/##')")"
     pw="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
     write_env "$drive" "$id1" "$id2" "$tz" "$pw"
     note "Saved settings to .env (with a new random database password)."
@@ -309,7 +332,8 @@ cmd_restore_db() {
 }
 
 cmd_pack() {
-  local dest=${1:-$HOME/Desktop/photo-stack-transfer-$(date +%Y-%m-%d).tar.gz}
+  local out="$HOME"; [ -d "$HOME/Desktop" ] && out="$HOME/Desktop"
+  local dest=${1:-$out/photo-stack-transfer-$(date +%Y-%m-%d).tar.gz}
   need_env; need_docker
   say "Stopping everything so the database is safe to copy..."
   docker compose stop

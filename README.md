@@ -11,15 +11,34 @@ Everything is controlled with one command: **`./photo`**. Run it from this folde
 
 ## Install (one command)
 
-**You need:** a Mac with [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed, and an APFS-formatted external drive plugged in.
+### On a Mac
+
+**You need:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and opened once, and an APFS-formatted external drive plugged in.
 
 Open Terminal and paste:
 ```sh
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/LuisFGarcia23/photo-stack/main/install.sh)"
 ```
+
+### On Windows 10/11
+
+1. **Install Ubuntu (WSL):** right-click Start → **Terminal (Admin)**, run `wsl --install`, and restart. Ubuntu opens after the restart — pick a username and password (you'll need this password later).
+2. **Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)**, open it, and accept the terms. In Docker Desktop: **Settings → General** → turn on *Start Docker Desktop when you sign in*; **Settings → Resources → WSL integration** → turn on **Ubuntu** → Apply.
+3. **Plug in the photo drive** (NTFS format is best) and note its letter, e.g. `E:`. In Ubuntu it's `/mnt/e`.
+4. **Stop the PC from sleeping:** Settings → System → Power → Sleep: *Never* when plugged in.
+5. Open the **Ubuntu** app (not PowerShell) and paste:
+   ```sh
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/LuisFGarcia23/photo-stack/main/install.sh)"
+   ```
+   When it asks for the drive path, enter `/mnt/e` (your drive's letter).
+
+All `./photo` commands below are run in the Ubuntu app on Windows (`cd ~/photo-stack` first).
+
+### What the installer does
+
 It downloads everything into `~/photo-stack`, asks for the drive and Apple ID(s), starts Immich, and walks you through the iCloud login (Apple password + the 6-digit code from your iPhone).
 
-Then open http://localhost:2283 and create your Immich account. That's it — iCloud photos now download in the background. Keep the Mac awake for the first download with `caffeinate -i`.
+Then open http://localhost:2283 and create your Immich account. That's it — iCloud photos now download in the background. On a Mac, keep it awake for the first download with `caffeinate -i`.
 
 Running the same command again later updates the scripts and keeps your settings and library.
 
