@@ -154,7 +154,7 @@ cmd_setup() {
   fi
 
   say "Done. Open http://localhost:2283"
-  [ -d postgres ] && note "(First time? Create the admin account there.)"
+  note "(First time? Create the admin account there.)"
 }
 
 cmd_login() {
@@ -213,7 +213,7 @@ cmd_status() {
     logged_in "$n" || note "Not logged in yet. Run in Terminal: ./photo login $n"
   done
   local drive; drive="$(dirname "$(envget UPLOAD_LOCATION)")"
-  [ -d "$drive" ] && say "Drive: $(df -h "$drive" | awk 'NR==2 {print $4 " free of " $2}')"
+  [ -d "$drive" ] && say "Drive: $(df -h "$drive" | awk 'NR==2 {print $4 " free of " $2}')" || true
 }
 
 # Shared awk: turn a "Downloaded <path>" / "<path> already exists" log line into one key per photo,
