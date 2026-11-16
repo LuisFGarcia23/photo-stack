@@ -120,7 +120,8 @@ cmd_setup() {
     case "$id1" in *@*) ;; *) die "That doesn't look like an Apple ID email." ;; esac
     id2="$(ask 'Apple ID for iCloud account 2 (Enter to skip)')"
     tz="$(ask 'Time zone (e.g. America/Chicago, America/New_York)' "$(readlink /etc/localtime 2>/dev/null | sed 's#.*/zoneinfo/##')")"
-    pw="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+    pw="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 32 || true)"
+    [ ${#pw} -eq 32 ] || die "Couldn't generate a database password."
     write_env "$drive" "$id1" "$id2" "$tz" "$pw"
     note "Saved settings to .env (with a new random database password)."
   fi
@@ -239,7 +240,7 @@ cmd_watch() {
   for n in $(active_accounts); do
     svc="$(svc_for "$n")"; svcs="$svcs $svc"; p="$(pass_progress "$svc")"
     args+=(-v "s$n=$svc" -v "id$n=$(id_for "$n")" -v "c$n=${p% *}" -v "t$n=${p#* }")
-    docker logs --tail 3 "$svc" 2>&1 | grep -q 'Waiting for' && args+=(-v "w$n=1")
+    case "$(docker logs --tail 3 "$svc" 2>&1)" in *"Waiting for"*) args+=(-v "w$n=1") ;; esac
   done
   # Follow new log lines and update the counts as each file finishes.
   docker compose logs -f --since 1s $svcs 2>/dev/null | awk "${args[@]}" "$ITEM_KEY_AWK"'
