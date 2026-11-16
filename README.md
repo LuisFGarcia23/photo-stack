@@ -9,25 +9,19 @@ Everything is controlled with one command: **`./photo`**. Run it from this folde
 
 ---
 
-## Set up (first time, or on a new Mac)
+## Install (one command)
 
-**You need:** a Mac with [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed, and the photo drive plugged in.
+**You need:** a Mac with [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed, and an APFS-formatted external drive plugged in.
 
-1. Get this folder onto the Mac (see [Moving to another Mac](#moving-to-another-mac) if it's coming from an old one).
-2. Open Terminal and run:
-   ```sh
-   cd ~/photo-stack
-   ./photo setup
-   ```
-   It asks for the drive path and Apple IDs, then starts everything.
-3. Log in to each iCloud account. Do this in Terminal; it asks for the Apple password and the 6-digit code from the iPhone:
-   ```sh
-   ./photo login 1
-   ./photo login 2      # only if you have a second account
-   ```
-4. Open http://localhost:2283 and create your Immich account.
+Open Terminal and paste:
+```sh
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/LuisFGarcia23/photo-stack/main/install.sh)"
+```
+It downloads everything into `~/photo-stack`, asks for the drive and Apple ID(s), starts Immich, and walks you through the iCloud login (Apple password + the 6-digit code from your iPhone).
 
-That's it. iCloud photos now download in the background.
+Then open http://localhost:2283 and create your Immich account. That's it — iCloud photos now download in the background. Keep the Mac awake for the first download with `caffeinate -i`.
+
+Running the same command again later updates the scripts and keeps your settings and library.
 
 ---
 

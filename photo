@@ -90,7 +90,8 @@ cmd_setup() {
     need_terminal setup
     say "First-time setup. Press Enter to accept the [default]."
     local drive id1 id2 tz pw
-    drive="$(ask 'Photo drive path' /Volumes/home_backup)"
+    echo "    Drives connected now:"; ls /Volumes | sed 's#^#      /Volumes/#'
+    drive="$(ask 'Photo drive path' "$(ls -d /Volumes/* 2>/dev/null | grep -v 'Macintosh HD' | head -1)")"
     [ -d "$drive" ] || die "Nothing at $drive. Plug in the drive (or check its name in Finder) and run setup again."
     id1="$(ask 'Apple ID for iCloud account 1')"
     case "$id1" in *@*) ;; *) die "That doesn't look like an Apple ID email." ;; esac
@@ -119,6 +120,14 @@ cmd_setup() {
   start_immich
   say "Starting iCloud sync..."
   for n in $(active_accounts); do start_account "$n"; done
+
+  # Offer the iCloud login right away for any account that still needs it.
+  if [ -t 0 ]; then
+    for n in $(active_accounts); do
+      logged_in "$n" && continue
+      if [ "$(ask "Log in to iCloud for $(id_for "$n") now? (Y/n)" Y)" != n ]; then cmd_login "$n"; fi
+    done
+  fi
 
   say "Done. Open http://localhost:2283"
   [ -d postgres ] && note "(First time? Create the admin account there.)"
