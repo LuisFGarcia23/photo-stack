@@ -160,18 +160,17 @@ cmd_status() {
   say "Services"
   docker compose ps -a --format 'table {{.Name}}\t{{.Status}}'
   for n in $(active_accounts); do
-    local svc dir total done_n state recent
-    svc="$(svc_for "$n")"; dir="$(dir_for "$n")"
-    total="$(docker compose logs "$svc" 2>/dev/null | grep -oE 'Downloading [0-9]+ original' | tail -1 | grep -oE '[0-9]+' || true)"
-    done_n="$(find "$dir" -type f -not -path '*/.cookies/*' -not -name '*_HEVC.MOV' -not -name .DS_Store 2>/dev/null | wc -l | tr -d ' ')"
+    local svc dir p total done_n state recent
+    svc="$(svc_for "$n")"; dir="$(dir_for "$n")"; p="$(pass_progress "$svc")"
+    done_n="${p% *}"; total="${p#* }"
     state="$(docker inspect -f '{{.State.Status}}' "$svc" 2>/dev/null || echo 'not started')"
     say "Account $n: $(id_for "$n") ($state)"
-    if [ -n "$total" ] && [ "$total" -gt 0 ]; then
-      note "$done_n of $total items ($((done_n * 100 / total))%)"
+    if [ "$total" -gt 0 ]; then
+      note "$done_n of $total items checked or downloaded this pass ($((done_n * 100 / total))%)"
     else
-      note "$done_n items downloaded"
+      note "No progress logged yet."
     fi
-    note "Folder: $dir  ($(du -sh "$dir" 2>/dev/null | cut -f1))"
+    note "Folder: $dir"
     recent="$(docker compose logs --tail 50 "$svc" 2>/dev/null || true)"
     if echo "$recent" | grep -qiE 'auth.*(fail|requir|expir)|invalid.*password|2fa|two-factor'; then
       note "!! Login looks expired. Run in Terminal: ./photo login $n"
@@ -182,6 +181,74 @@ cmd_status() {
   done
   local drive; drive="$(dirname "$(envget UPLOAD_LOCATION)")"
   [ -d "$drive" ] && say "Drive: $(df -h "$drive" | awk 'NR==2 {print $4 " free of " $2}')"
+}
+
+# Shared awk: turn a "Downloaded <path>" / "<path> already exists" log line into one key per photo,
+# so a photo and its Live Photo video (IMG_1.HEIC + IMG_1_HEVC.MOV, or IMG_1.JPG + IMG_1.MOV) count once.
+ITEM_KEY_AWK='
+  function item_key(line,  p) {
+    if (line ~ /INFO +Downloaded \/data\//) { p = line; sub(/.*INFO +Downloaded \/data\//, "", p) }
+    else if (line ~ / already exists/)     { p = line; sub(/.*DEBUG +\/data\//, "", p); sub(/ already exists.*/, "", p) }
+    else return ""
+    sub(/\.[A-Za-z0-9]+$/, "", p); sub(/_HEVC$/, "", p)
+    return p
+  }'
+
+pass_progress() { # "<done> <total>" for the latest sync pass, read from the container's log (fast)
+  docker logs "$1" 2>&1 | awk "$ITEM_KEY_AWK"'
+    match($0, /Downloading [0-9]+ original/) { total = substr($0, RSTART + 12, RLENGTH - 21) + 0; done = 0; delete seen; next }
+    { k = item_key($0); if (k != "" && !(k in seen)) { seen[k] = 1; done++ } }
+    END { print done + 0, total + 0 }'
+}
+
+cmd_watch() {
+  need_env; need_docker
+  local n svc p svcs="" args=()
+  for n in $(active_accounts); do
+    svc="$(svc_for "$n")"; svcs="$svcs $svc"; p="$(pass_progress "$svc")"
+    args+=(-v "s$n=$svc" -v "id$n=$(id_for "$n")" -v "c$n=${p% *}" -v "t$n=${p#* }")
+    docker logs --tail 3 "$svc" 2>&1 | grep -q 'Waiting for' && args+=(-v "w$n=1")
+  done
+  # Follow new log lines and update the counts as each file finishes.
+  docker compose logs -f --since 1s $svcs 2>/dev/null | awk "${args[@]}" "$ITEM_KEY_AWK"'
+    function draw(  i, pct) {
+      printf "\033[H\033[2J"
+      printf "Live iCloud download count   (Ctrl+C to exit; downloads keep running)\n\n"
+      for (i = 1; i <= 2; i++) {
+        if (s[i] == "") continue
+        pct = t[i] ? int(c[i] * 100 / t[i]) : 0; if (pct > 100) pct = 100
+        printf "Account %d  %s\n", i, id[i]
+        printf "  %d of %d items  (%d%%)\n", c[i], t[i], pct
+        printf "  %s\n", st[i]
+        if (cur[i] != "") printf "  Current file: %s\n", cur[i]
+        if (f[i]) printf "  Skipped this session: %d (retried on next pass)\n", f[i]
+        if (ts[i] != "") printf "  Last activity: %s UTC\n", ts[i]
+        printf "\n"
+      }
+      fflush()
+    }
+    BEGIN {
+      s[1] = s1; id[1] = id1; c[1] = c1; t[1] = t1; idx[s1] = 1
+      s[2] = s2; id[2] = id2; c[2] = c2; t[2] = t2; if (s2 != "") idx[s2] = 2
+      for (i = 1; i <= 2; i++) st[i] = "Waiting for activity..."
+      if (w1) st[1] = "Up to date. Next check within the hour."
+      if (w2) st[2] = "Up to date. Next check within the hour."
+      draw()
+    }
+    {
+      i = idx[$1]; if (!i) next
+      ts[i] = $4
+      k = item_key($0)
+      if (k != "") {
+        if (!((i, k) in seen)) { seen[i, k] = 1; c[i]++ }
+        if ($0 ~ /Downloaded/) { st[i] = "Downloading"; draw() }
+        else { st[i] = "Checking for new photos..."; if (c[i] % 50 == 0) draw() }
+      }
+      else if ($0 ~ /DEBUG +Downloading \/data\//) { sub(/.*Downloading \/data\//, ""); sub(/\.\.\.$/, ""); cur[i] = $0; st[i] = "Downloading"; draw() }
+      else if (match($0, /Downloading [0-9]+ original/)) { t[i] = substr($0, RSTART + 12, RLENGTH - 21) + 0; c[i] = 0; f[i] = 0; st[i] = "Checking iCloud for new photos..."; cur[i] = ""; draw() }
+      else if ($0 ~ /Waiting for/) { st[i] = "Up to date. Next check within the hour."; cur[i] = ""; draw() }
+      else if ($0 ~ /Could not download/) { f[i]++; draw() }
+    }'
 }
 
 cmd_logs() {
@@ -255,7 +322,8 @@ Usage: ./photo <command>
   start [1|2]    Start everything, or resume one account's sync.
   stop  [1|2]    Stop everything (do this before ejecting the drive), or pause one account.
   status         Show what's running and iCloud download progress.
-  logs  [1|2]    Watch live logs (Ctrl+C to stop watching).
+  watch          Live download count for each account (Ctrl+C to exit).
+  logs  [1|2]    Watch raw live logs (Ctrl+C to stop watching).
   import [1|2]   Copy an account's iCloud photos into Immich.
   pack           Bundle settings + database to move to another Mac.
   restore-db     Rebuild the database from the newest backup on the drive.
@@ -268,6 +336,7 @@ case "${1:-help}" in
   start)      cmd_start "${2:-}" ;;
   stop)       cmd_stop "${2:-}" ;;
   status)     cmd_status ;;
+  watch)      cmd_watch ;;
   logs)       cmd_logs "${2:-}" ;;
   import)     cmd_import "${2:-1}" ;;
   pack)       cmd_pack "${2:-}" ;;

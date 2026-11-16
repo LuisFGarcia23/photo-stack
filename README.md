@@ -35,6 +35,7 @@ That's it. iCloud photos now download in the background.
 
 | I want to… | Run |
 |---|---|
+| Watch a live download count | `./photo watch` (Ctrl+C to exit) |
 | See download progress | `./photo status` |
 | Stop everything (e.g. before unplugging the drive) | `./photo stop` |
 | Start everything again | `./photo start` |
